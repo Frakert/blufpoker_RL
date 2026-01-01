@@ -1,14 +1,14 @@
 """
+run_trained_agent.py
+
 Demo script to run a trained PPO agent in DiceBluffEnv.
 """
-
 import time
-
+import numpy as np
 from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import DummyVecEnv
-from blufpoker_env import DiceBluffEnv, Phase, ActionType, PENALTY_LOSE_ROUND
+from stable_baselines3.common.vec_env import DummyVecEnv
+from blufpoker_env import DiceBluffEnv, Phase, ActionType, POKER_VALUE, PENALTY_LOSE_ROUND
 
-# --- Decode throw action for readability ---
 def decode_throw_action(action):
     if not (ActionType.THROW_START <= action < ActionType.DECLARE_START):
         return "Invalid Throw Action"
@@ -26,23 +26,30 @@ def decode_throw_action(action):
         desc += " (Cup Used!)"
     return desc
 
-# --- Main demo ---
 def run_agent_demo(model_path, rounds=3, render_delay=0.5):
+    # Wrap environment in DummyVecEnv
     env = DummyVecEnv([lambda: DiceBluffEnv(num_players=4)])
+    # Load trained PPO model
     model = PPO.load(model_path, env=env)
 
     for r in range(rounds):
-        obs, _ = env.reset()
-        terminated, truncated = False, False
+        obs = env.reset()
+        terminated = False
         step_count = 0
         print(f"\n========== ROUND {r+1} ==========")
-        while not terminated and not truncated:
-            action, _states = model.predict(obs, deterministic=True)
-            # VecEnv returns array of shape (1, ), take first element
-            action_val = int(action[0])
-            phase = Phase(obs[0]['phase'])
-            action_desc = ""
 
+        while not terminated:
+            # Predict action using the trained agent
+            action, _states = model.predict(obs, deterministic=True)
+            action_val = int(action[0])
+
+            # Extract observation for player 0
+            phase = Phase(obs['phase'][0])
+            player_index = obs['player_index'][0]
+            prev_declared_value = obs['prev_declared_value'][0]
+            poker_attempt = obs['poker_attempt'][0]
+
+            # Describe action
             if phase == Phase.BELIEVE:
                 action_desc = "BELIEVE" if action_val == ActionType.BELIEVE else "DOUBT"
             elif phase == Phase.THROW:
@@ -50,23 +57,31 @@ def run_agent_demo(model_path, rounds=3, render_delay=0.5):
             elif phase == Phase.DECLARE:
                 action_desc = f"DECLARE {action_val - ActionType.DECLARE_START}"
             elif phase == Phase.POKER:
-                attempt_num = obs[0]['poker_attempt'] + 1
-                action_desc = f"POKER THROW (Attempt {attempt_num})"
+                action_desc = f"POKER THROW (Attempt {poker_attempt + 1})"
+            else:
+                action_desc = str(action_val)
 
-            print(f"\nStep {step_count} >> Player {obs[0]['player_index']} ({phase.name}) decides: {action_desc}")
-            obs, reward, terminated, truncated, info = env.step(action)
-            env.render()
-            if reward[0] != 0:
-                print(f"Reward: {reward[0]}")
-            if info and info[0]:
-                print(f"Info: {info[0]}")
+            print(f"\nStep {step_count} >> Player {player_index} ({phase.name}) decides: {action_desc}")
+
+            # Step environment
+            obs, rewards, dones, infos = env.step([action_val])
+
+            # Render environment
+            env.envs[0].render()
+
+            # Print reward and info if any
+            if rewards[0] != 0:
+                print(f"Reward: {rewards[0]}")
+            if infos and infos[0]:
+                print(f"Info: {infos[0]}")
 
             step_count += 1
+            terminated = dones[0]
+
             time.sleep(render_delay)
 
         print(f"\nROUND {r+1} ENDED! LOSER: Player {env.envs[0].loser} (Penalty: {PENALTY_LOSE_ROUND})")
         print("===================================")
 
 if __name__ == "__main__":
-    # Replace with your trained model path
     run_agent_demo("ppo_dicebluff_final.zip", rounds=3, render_delay=0.2)
